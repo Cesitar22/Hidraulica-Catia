@@ -1,0 +1,586 @@
+'AUTHOR: César Eduardo Jiménez Gámez
+'DATE: 17/11/2023
+'Esta macro permite automatizar el procedimiento de diseño de PIPING (tubos de hidráulica), necesitando haber colocado previamente los clamps a utilizar...
+'...y los elementos de referencia; con estos input se crea el tubo que pasa a través de estos clamps.
+
+Public distancia_planos_offset As Double, diametro_exterior_tubo As Double, espesor_tubo As Double
+Public coef_distancia_minima_recta As Integer, coef_radio_corners_minimo As Integer
+Public valores As Boolean
+
+Sub CATMain()
+    'Es obligatorio comenzar siempre por CATMain para que la macro se pueda ejecutar sin tener que entrar a ella
+   
+    'Declaramos que queremos trabaja en el documento activo en Catia
+    Dim Document As Document
+    Set Document = CATIA.ActiveDocument
+   
+    'Hacemos una serie de preguntas de control al usuario antes de ejecutar la macro completa
+    Dim respuesta_1 As VbMsgBoxResult, respuesta_2 As VbMsgBoxResult, respuesta_3 As VbMsgBoxResult, respuesta_4 As VbMsgBoxResult
+
+    respuesta_1 = MsgBox("RECUERDA." & vbCrLf & vbCrLf & _
+    "La estructura que necesitas haber creado para los elementos importados es un Geom Set llamado IMPORTED_ELEMENTS:" & vbCrLf & vbCrLf & _
+    "1º NIVEL: los diferentes tubos (por ejemplo: HP Y LP)" & vbCrLf & vbCrLf & _
+    "2º NIVEL: las diferentes ramas de cada tubo (por ejemplo: HP_VTP y HP_HTP)" & vbCrLf & vbCrLf & _
+    "3º NIVEL: un Geom Set por cada elemento importado para esa rama.", vbQuestion + vbYesNo, "Advertencia")
+    If respuesta_1 = vbYes Then
+        respuesta_2 = MsgBox("RECUERDA." & vbCrLf & vbCrLf & "*¿Has mantenido los nombres de los planos ('Plane') y de los ejes ('Axis') por defecto?" & _
+        vbCrLf & vbCrLf & "*¿Has seguido un orden correcto en la colocación de los clamps y de los planos de referencia de los mismos?", vbQuestion + vbYesNo, "Advertencia")
+        If respuesta_2 = vbYes Then
+           
+            valores = True
+            UserForm1.Show vbModal
+            If valores = False Then
+                MsgBox "La macro se ha detenido.Vuelva a ejecutarla si desea continuar."
+                Exit Sub
+            End If
+            Dim distancia_minima_recta As Double, radio_corners_minimo As Double
+            radio_corners_minimo = coef_radio_corners_minimo * diametro_exterior_tubo
+            distancia_minima_recta = coef_distancia_minima_recta * diametro_exterior_tubo
+           
+            respuesta_3 = MsgBox("CONFIRMA." & vbCrLf & vbCrLf & "Los valores de los parámetros con los se va a ejecutar esta macro son:" & vbCrLf & vbCrLf & _
+            "*Distancia de los planos offset: " & distancia_planos_offset & "mm" & vbCrLf & vbCrLf & "*Diámetro exterior de los rutados: " & diametro_exterior_tubo & _
+            "mm" & vbCrLf & vbCrLf & "*Espesor de los tubos: " & espesor_tubo & "mm" & vbCrLf & vbCrLf & "*Radio de doblado mínimo: " & radio_corners_minimo & "mm" & _
+            vbCrLf & vbCrLf & "*Distancia recta mínima entre doblados: " & distancia_minima_recta & "mm", vbQuestion + vbYesNo, "Advertencia")
+            If respuesta_3 = vbYes Then
+            Else
+                MsgBox "Arréglelo y vuelva a correr la macro."
+                Exit Sub
+            End If
+        Else
+            MsgBox "Arréglelo y vuelva a correr la macro."
+            Exit Sub
+        End If
+    Else
+        MsgBox "Arréglelo y vuelva a correr la macro."
+        Exit Sub
+    End If
+
+    'Declaración de variables
+    Dim selectedElement As Object
+    Dim selectionCount As Integer, i As Integer, j As Integer
+    Dim geometricalSet As HybridBodies
+    Dim elem As HybridBody, elem2 As HybridBody, elem3 As HybridBody, elem_work As HybridBody, elem2_work As HybridBody
+    Dim elemento As HybridShape, elemento_work As HybridShape, elemento_work2 As HybridShape, elemento_work3 As HybridShape, elemento_work4 As HybridShape, elemento_work5 As HybridShape, new_plane_offset As HybridShape, new_intersection As HybridShape, new_intersection_offset As HybridShape, eje As HybridShape
+    Dim texto As String
+    Dim selection As selection
+    Set selection = Document.selection
+   
+    respuesta_4 = MsgBox("Seleccione el Geom Set llamado IMPORTED_ELEMENTS. Si no desea continuar con la macro, seleccione NO.", vbQuestion + vbYesNo, "Advertencia")
+    If respuesta_4 = vbNo Then
+        MsgBox "La macro se ha detenido."
+        Exit Sub
+    End If
+   
+    'Si hay algún elemento seleccionado previamente, limpiamos la selección
+    Document.selection.Clear
+    'Esta part del código nos permite darle al usuario la posibilidad de elegir el Geometrical Set IMPORTED_ELEMENTS
+    CATIA.StartCommand "SelectFromTree"
+    Do While selectionCount = 0
+        selectionCount = Document.selection.Count
+        DoEvents
+    Loop
+    Set selectedElement = Document.selection.Item(1)
+    selection_name = selectedElement.Value.Name
+    selection_type = selectedElement.Type
+    If selection_name <> "IMPORTED_ELEMENTS" Or selection_type <> "HybridBody" Then
+        MsgBox "La selección no es el Geom Set llamado IMPORTED_ELEMENTS. Vuelva a correr la macro.", vbExclamation, "Error"
+        Exit Sub
+    Else
+    End If
+   
+    'Guardamos en una variable la información del padre de IMPORTED_ELEMENTS y añadimos dentro de este el Geometrical Set WORKING_ELEMENTS
+    'Definimos el geometrical set donde vamos a trabajar (IMPORTED_ELEMENTS), el CatPart donde se encuentra este geometrical set y el módulo que nos permite crear geometrías
+    Set parentHybridBody = selectedElement.Value.Parent
+    Set newGeometricalSet = parentHybridBody.Add()
+    newGeometricalSet.Name = "WORKING_ELEMENTS"
+    Set geom_set_work = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies
+    Set geometricalSet = selectedElement.Value
+    Set Parte = selectedElement.Value.Parent.Parent
+    Set HybridShapeFactory = Parte.HybridShapeFactory
+    Set ShapeFactory = Parte.ShapeFactory
+   
+'--------------------------------------------------------------------DEFINICIÓN DE PARÁMETROS----------------------------------------------------------------------------------
+   
+    Dim length1 As Parameter, length2 As Parameter, length3 As Parameter, length4 As IntParam, length5 As IntParam
+    Set length1 = Parte.Parameters.CreateDimension("Distancia_codos_y_clamps", "LENGTH", distancia_planos_offset)
+    Set length2 = Parte.Parameters.CreateDimension("Diametro_tubo_exterior", "LENGTH", diametro_exterior_tubo)
+    Set length3 = Parte.Parameters.CreateDimension("Espesor_tubo", "LENGTH", espesor_tubo)
+    Set length4 = Parte.Parameters.CreateInteger("Coef_distancia_minima_recta", coef_distancia_minima_recta)
+    Set length5 = Parte.Parameters.CreateInteger("Coef_radio_corners_minimo", coef_radio_corners_minimo)
+    Parte.Update
+   
+'---------------------------------------Este bucle recorre IMPORTED_ELEMENTS y en base a él, creamos el Geometrical Set WORKING_ELEMENTS--------------------------------------------
+    Dim nombres_subrutas() As String, nombres_rutas() As String
+    ReDim nombres_subrutas(1 To 1)
+    ReDim nombres_rutas(1 To 1)
+    contador4 = 1
+    contador6 = 1
+    For Each elem In geometricalSet
+        nombre = elem.Name
+        Set new_geomset = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Add()
+        new_geomset.Name = nombre
+        'Guardamos en un vector los nombres de las rutas
+        nombres_rutas(UBound(nombres_rutas)) = nombre
+        ReDim Preserve nombres_rutas(1 To UBound(nombres_rutas) + 1)
+       
+        For Each elem2 In elem.HybridBodies
+            Dim nombre_2 As String
+            nombre_2 = elem2.Name
+           
+            'Guardamos en un vector los nombres de las subrutas
+            nombres_subrutas(UBound(nombres_subrutas)) = nombre_2
+            ReDim Preserve nombres_subrutas(1 To UBound(nombres_subrutas) + 1)
+           
+            'Creamos los Geometrical Set de las subrutas y los demás que hay dentro de las mismas
+            Set new_geomset2 = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Add()
+            new_geomset2.Name = nombre_2
+            Set Profile = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Add()
+            Profile.Name = "PROFILE"
+            Set Path = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Add()
+            Path.Name = "PATH"
+            Set Offset = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Add()
+            Offset.Name = "OFFSET"
+            Set Intersections = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Add()
+            Intersections.Name = "INTERSECCIONES"
+            Set Lines = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Add()
+            Lines.Name = "LINEAS"
+            Set Corners = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Add()
+            Corners.Name = "CORNERS"
+            'Estas son las rutas dentro del árbol de Catia que nos permiten acceder al PATH y PROFILE de cada una de las subrutas que haremos
+            Set PROFILE_GS = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Profile.Name)
+            Set PATH_GS_intersections = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Item(Intersections.Name)
+            Set PATH_GS_offset = parentHybridBody.Item("WORKING_ELEMENTS").HybridBodies.Item(nombre).HybridBodies.Item(nombre_2).HybridBodies.Item(Path.Name).HybridBodies.Item(Offset.Name)
+           
+            'Aquí buscamos los ejes y los planos de referencia de los clamps colocados, creamos los planos offset y los puntos de intersección necesarios para el rutado; guardamos cada uno de estos elementos nuevos en el Geometrical Set que les corresponda
+            Creacion_offsets_and_intersections elem3, elem2, elemento, HybridShapeFactory, PATH_GS_offset, PATH_GS_intersections, Parte, length1, nombres_rutas(contador6), nombres_subrutas(contador4)
+            contador4 = contador4 + 1
+        Next elem2
+        contador6 = contador6 + 1
+    Next elem
+    ReDim Preserve nombres_subrutas(1 To UBound(nombres_subrutas) - 1)
+    Parte.Update
+   
+'-------------------------Este bucle permite recorrer el Geometrical Set WORKING_ELEMENTS y crear todas las LÍNEAS y los CORNERS--------------------------------------------
+    contador2 = 1
+    contador5 = 1
+    For Each elem_work In geom_set_work
+        Dim Red As Integer, Green As Integer, Blue As Integer
+        Elegir_color_ruta Red, Green, Blue, contador5
+        For Each elem2_work In elem_work.HybridBodies
+            Set geom_set_guardado_intersecciones = elem2_work.HybridBodies.Item("PATH").HybridBodies.Item("INTERSECCIONES")
+            Set geom_set_guardado_lineas = elem2_work.HybridBodies.Item("PATH").HybridBodies.Item("LINEAS")
+            Set geom_set_guardado_corners = elem2_work.HybridBodies.Item("PATH").HybridBodies.Item("CORNERS")
+            Set geom_set_guardado_offsets = elem2_work.HybridBodies.Item("PATH").HybridBodies.Item("OFFSET")
+            Set geom_set_profile = elem2_work.HybridBodies.Item("PROFILE")
+            Set geom_set_path = elem2_work.HybridBodies.Item("PATH")
+           
+            'Almacenamos todas las intersecciones creadas en un vector dinámico (de tamaño indefinido)
+            contador1 = 0
+            Dim elementos() As Variant
+            ReDim elementos(1 To 1)
+            For Each elemento_work In geom_set_guardado_intersecciones.HybridShapes
+                    If elemento_work.Name Like "*Intersect*" Then
+                        Set elementos(UBound(elementos)) = elemento_work
+                        ReDim Preserve elementos(1 To UBound(elementos) + 1)
+                        contador1 = contador1 + 1
+                        If contador1 = 2 Then
+                            Dim interseccion_profile As HybridShape
+                            Set interseccion_profile = elemento_work
+                        End If
+                    End If
+            Next elemento_work
+           
+            ' Elimina el último elemento vacío en el vector
+            ReDim Preserve elementos(1 To UBound(elementos) - 1)
+            'Intercambiamos los elementos del vector de intersecciones en las posiciones 1 y 2, 5 y 6, 9 y 10, etc.
+            Intercambiar_elementos i, elementos
+            'Creamos todas las líneas del PATH
+            Crear_lineas Red, Green, Blue, i, elementos, HybridShapeFactory, geom_set_guardado_lineas, Parte, selection
+           
+            'Creamos un vector que contiene todas las líneas creadas para esta subruta
+            Dim elementos_2() As Variant
+            ReDim elementos_2(1 To 1)
+            For Each elemento_work2 In geom_set_guardado_lineas.HybridShapes
+                If elemento_work2.Name Like "*Line*" Then
+                    Set elementos_2(UBound(elementos_2)) = elemento_work2
+                    ReDim Preserve elementos_2(1 To UBound(elementos_2) + 1)
+                End If
+            Next elemento_work2
+            ReDim Preserve elementos_2(1 To UBound(elementos_2) - 1)
+           
+            'Creamos los corners
+            Creacion_corners j, Red, Green, Blue, selection, nombres_rutas(contador5), nombres_subrutas(contador2), Parte, HybridShapeFactory, radio_corners_minimo, geom_set_guardado_corners, elementos_2
+           
+            'Creamos los PROFILE para cada subruta
+            Dim plano_soporte_profile As HybridShape
+            Set plano_soporte_profile = geom_set_guardado_offsets.HybridShapes.Item(1)
+            Set Perfil = HybridShapeFactory.AddNewCircleCtrRad(interseccion_profile, plano_soporte_profile, False, diametro_exterior_tubo / 2)
+            Perfil.SetLimitation 1
+            geom_set_profile.AppendHybridShape Perfil
+            Parte.Update
+            Parametrizar_diametro length2, nombres_rutas(contador5), nombres_subrutas(contador2), Perfil, Parte
+           
+            'Añadimos todos los bodies necesarios para las RIB de cada Subruta (un body por subruta)
+            Dim partbody As Body
+            Set partbody = Parte.Bodies.Add()
+            partbody.Name = nombres_subrutas(contador2)
+            Parte.Update
+           
+            'Hacemos un join por cada subruta de las líneas y corners del path
+            Dim mi_join As HybridShapeAssemble
+            Set mi_join = Crear_join(elemento_work4, geom_set_guardado_lineas, selection, HybridShapeFactory, elemento_work5, geom_set_guardado_corners, geom_set_path)
+            Parte.Update
+           
+            'Hacemos la RIB de cada subruta
+            Dim mi_rib As RIB
+            Set mi_rib = Crear_rib(Parte, Perfil, mi_join, ShapeFactory, nombres_subrutas(contador2))
+            Parametrizar_espesor length3, nombres_subrutas(contador2), mi_rib, Perfil, Parte
+            Dar_color_rib Red, Green, Blue, mi_rib, selection
+            Parte.Update
+           
+            contador2 = contador2 + 1
+        Next elem2_work
+        contador5 = contador5 + 1
+    Next elem_work
+   
+End Sub
+
+Sub Elegir_color_ruta(Red As Integer, Green As Integer, Blue As Integer, contador5)
+    If contador5 = 1 Then 'LP --> verde claro
+        Red = 128
+        Green = 255
+        Blue = 128
+    ElseIf contador5 = 2 Then 'HP --> verde oscuro
+        Red = 0
+        Green = 128
+        Blue = 0
+    ElseIf contador5 > 2 Then
+        Red = Int(Rnd() * 255)
+        Green = Int(Rnd() * 255)
+        Blue = Int(Rnd() * 255)
+    End If
+End Sub
+
+Sub Dar_color_corners(Rojo As Integer, Verde As Integer, Azul As Integer, corner1 As HybridShape, corner2 As HybridShape, selection As selection)
+    selection.Clear
+    selection.Add corner1
+    selection.Add corner2
+    selection.VisProperties.SetRealColor Rojo, Verde, Azul, 0
+    selection.Clear
+End Sub
+
+Sub Dar_color_rib(Rojo As Integer, Verde As Integer, Azul As Integer, RIB As RIB, selection As selection)
+    selection.Clear
+    selection.Add RIB
+    selection.VisProperties.SetRealColor Rojo, Verde, Azul, 0
+    selection.Clear
+End Sub
+
+Sub Dar_color_linea(Rojo As Integer, Verde As Integer, Azul As Integer, mi_linea As HybridShapeLinePtPt, selection As selection)
+    selection.Clear
+    selection.Add mi_linea
+    selection.VisProperties.SetRealColor Rojo, Verde, Azul, 0
+    selection.Clear
+End Sub
+
+Function Crear_rib(Parte, Profile, join_path_subruta, ShapeFactory, nombre_subruta As String) As RIB
+    Dim referencia1 As Reference, referencia2 As Reference
+    Set referencia1 = Parte.CreateReferenceFromObject(Profile)
+    Set referencia2 = Parte.CreateReferenceFromObject(join_path_subruta)
+           
+    Dim RIB As RIB
+    Set RIB = ShapeFactory.AddNewRibFromRef(referencia1, referencia2)
+    RIB.IsThin = True
+           
+    Dim espesor1 As Length, espesor2 As Length
+    Dim nombre_rib_1 As String, nombre_rib_2 As String
+    nombre_rib_1 = Parte.Name & "\" & nombre_subruta & "\" & RIB.Name & "\ThickThin1"
+    nombre_rib_2 = Parte.Name & "\" & nombre_subruta & "\" & RIB.Name & "\ThickThin2"
+    Set espesor1 = Parte.Parameters.Item(nombre_rib_1)
+    espesor1.Value = 0
+    Set espesor2 = Parte.Parameters.Item(nombre_rib_2)
+    espesor2.Value = espesor_tubo
+   
+    Set Crear_rib = RIB
+End Function
+
+Function Crear_join(elemento_work4 As HybridShape, geom_set_guardado_lineas, selection As selection, HybridShapeFactory, elemento_work5 As HybridShape, geom_set_guardado_corners, geom_set_path)
+    Dim join_path_subruta As HybridShapeAssemble
+    Dim visibilidad As CatVisPropertyShow
+    contador3 = 0
+    For Each elemento_work4 In geom_set_guardado_lineas.HybridShapes
+    selection.Clear
+    selection.Add elemento_work4
+    selection.VisProperties.GetShow visibilidad
+    If visibilidad = catVisPropertyShowAttr Then
+        contador3 = contador3 + 1
+        If contador3 < 3 Then
+            If contador3 = 1 Then
+                Dim reference1 As HybridShape
+                Set reference1 = elemento_work4
+            ElseIf contador3 = 2 Then
+                Dim reference2 As HybridShape
+                Set reference2 = elemento_work4
+                Set join_path_subruta = HybridShapeFactory.AddNewJoin(reference1, reference2)
+            End If
+        Else
+            join_path_subruta.AddElement elemento_work4
+        End If
+    End If
+    Next elemento_work4
+    For Each elemento_work5 In geom_set_guardado_corners.HybridShapes
+        selection.Clear
+        selection.Add elemento_work5
+        selection.VisProperties.GetShow visibilidad
+        If visibilidad = catVisPropertyShowAttr Then
+            join_path_subruta.AddElement elemento_work5
+        End If
+    Next elemento_work5
+    selection.Clear
+    join_path_subruta.SetConnex 1
+    join_path_subruta.SetManifold 1
+    join_path_subruta.SetSimplify 0
+    join_path_subruta.SetSuppressMode 0
+    join_path_subruta.SetDeviation 0.001
+    join_path_subruta.SetAngularToleranceMode 0
+    join_path_subruta.SetAngularTolerance 0.5
+    join_path_subruta.SetFederationPropagation 0
+    geom_set_path.AppendHybridShape join_path_subruta
+   
+    Set Crear_join = join_path_subruta
+End Function
+
+Sub Crear_lineas(Red As Integer, Green As Integer, Blue As Integer, i, elementos, HybridShapeFactory, geom_set_guardado_lineas, Parte, selection As selection)
+    For i = 1 To UBound(elementos) - 1
+        Dim punto1 As HybridShape, punto2 As HybridShape
+        Set punto1 = elementos(i)
+        Set punto2 = elementos(i + 1)
+       
+        Dim linea As HybridShape
+        Set linea = HybridShapeFactory.AddNewLinePtPt(punto1, punto2)
+        geom_set_guardado_lineas.AppendHybridShape linea
+               
+        Parte.Update
+        Dar_color_linea Red, Green, Blue, linea, selection
+    Next i
+End Sub
+
+Sub Creacion_offsets_and_intersections(elem3 As HybridBody, elem2 As HybridBody, elemento As HybridShape, HybridShapeFactory, PATH_GS_offset, PATH_GS_intersections, Parte, length1 As Parameter, nombre_ruta, nombre_subruta)
+    For Each elem3 In elem2.HybridBodies
+        For Each elemento In elem3.HybridShapes
+            If elemento.Name Like "*Axis*" Then
+                Set eje = elemento
+                Exit For
+            End If
+        Next elemento
+        If eje Is Nothing Then
+            MsgBox "No se encontró el eje en el conjunto geométrico. Arréglelo y vuelva a correr la macro.", vbExclamation
+            Exit Sub
+        End If
+        For Each elemento In elem3.HybridShapes
+            If elemento.Name Like "*Plane*" Then
+                Set new_plane_offset = HybridShapeFactory.AddNewPlaneOffset(elemento, distancia_planos_offset, True)
+                PATH_GS_offset.AppendHybridShape new_plane_offset
+                Parte.Update
+                       
+                Parametrizar_planos_offset length1, nombre_ruta, nombre_subruta, new_plane_offset, Parte
+                       
+                Set new_intersection = HybridShapeFactory.AddNewIntersection(elemento, eje)
+                Set new_intersection_offset = HybridShapeFactory.AddNewIntersection(new_plane_offset, eje)
+                PATH_GS_intersections.AppendHybridShape new_intersection
+                PATH_GS_intersections.AppendHybridShape new_intersection_offset
+            End If
+        Next elemento
+    Next elem3
+End Sub
+
+Sub Creacion_corners(j, Red As Integer, Green As Integer, Blue As Integer, selection As selection, nombre_ruta, nombre_subruta, Parte, HybridShapeFactory, radio_corners_minimo, geom_set_guardado_corners, elementos_2)
+    For j = 3 To UBound(elementos_2) - 2 Step 4
+        Dim linea1 As HybridShape, linea2 As HybridShape, linea3 As HybridShape
+        Dim line1 As Reference, line2 As Reference, line3 As Reference
+        Dim corner1 As HybridShape, corner2 As HybridShape
+        Dim angulo1 As Double, angulo2 As Double
+        Set linea1 = elementos_2(j)
+        Set linea2 = elementos_2(j + 1)
+        Set linea3 = elementos_2(j + 2)
+               
+        'Dim TheSPAWorkbench As Workbench
+        'Set TheSPAWorkbench = Document.GetWorkbench("SPAWorkbench")
+        'Set line1 = Parte.CreateReferenceFromObject(linea1)
+        'Set line2 = Parte.CreateReferenceFromObject(linea2)
+        'Set line3 = Parte.CreateReferenceFromObject(linea3)
+        'Dim TheMeasurable1 As Measurable, TheMeasurable2 As Measurable
+        'Set TheMeasurable1 = TheSPAWorkbench.Measurable(line1)
+        'Set TheMeasurable2 = TheSPAWorkbench.Measurable(line2)
+        'angulo1 = TheMeasurable1.GetAngleBetween(line2)
+        'angulo2 = TheMeasurable2.GetAngleBetween(line3)
+               
+        'MsgBox "Los ángulos entre las líneas son:" & vbCrLf & angulo1 & vbCrLf & angulo2
+        '
+        'angulo1 = angulo1 * (180 / Application.Pi)
+        'angulo2 = angulo2 * (180 / Application.Pi)
+        '
+        'MsgBox "Los ángulos entre las líneas son:" & vbCrLf & angulo1 & vbCrLf & angulo2
+        '
+        'selection.Clear
+        'If angulo1 = 0 Or angulo2 = 0 Then
+        '    selection.Add linea1
+        '    selection.Add linea2
+        '    selection.Add linea3
+        '    MsgBox "Estás intentando hacer corners entre líneas cuyo ángulo es de 0º. Estas probablemente sean:" & vbCrLf & _
+        '    linea1.Name & vbCrLf & linea2.Name & vbCrLf & linea3.Name, vbExclamation, "Error"
+        '    Exit Sub
+        'End If
+               
+               
+        'A y B pueden ser 1 y -1 (NOS INDICA DONDE SE COLOCA EL CENTRO DE LA ESQUINA en función de la orientación de las tangentes)Definen el FirstTangentOrientation y el SecondTangentOrientation
+        A = 1
+        B = -1
+        'DiscriminationIndex (puede tomar los valores 1, -2 y otros). Tanto el valor 1 y el -2 en principio significan lo mismo...discriminación automática sobre resolver la operación de esquina. EL 0 FUNCIONA PARA TODOS
+        C = 0
+        D = 0
+        'BeginOfCorner. El 1 es "modo radio". El 2 es "modo radio-tangente" RECOMENDABLE DEJAR EL 2 EN AMBOS CORNERS
+        E = 2
+        F = 2
+               
+        selection.Clear
+        On Error Resume Next
+        Set corner1 = HybridShapeFactory.AddNewCorner(linea1, linea2, Nothing, radio_corners_minimo, A, A, True)
+        corner1.DiscriminationIndex = C
+        corner1.BeginOfCorner = E
+        HybridShapeFactory.GSMVisibility linea1, 0
+        HybridShapeFactory.GSMVisibility linea2, 0
+        geom_set_guardado_corners.AppendHybridShape corner1
+        Parte.Update
+        If Err.Number <> 0 Then
+            selection.Add corner1
+            selection.Delete
+            Err.Clear
+            A = -1
+            Set corner1 = HybridShapeFactory.AddNewCorner(linea1, linea2, Nothing, radio_corners_minimo, A, A, True)
+            corner1.DiscriminationIndex = C
+            corner1.BeginOfCorner = E
+            HybridShapeFactory.GSMVisibility linea1, 0
+            HybridShapeFactory.GSMVisibility linea2, 0
+        End If
+        geom_set_guardado_corners.AppendHybridShape corner1
+        Parte.Update
+        On Error GoTo 0
+               
+        selection.Clear
+           
+        On Error Resume Next
+        Set corner2 = HybridShapeFactory.AddNewCorner(corner1, linea3, Nothing, radio_corners_minimo, B, B, True)
+        corner2.DiscriminationIndex = D
+        corner2.BeginOfCorner = F
+        HybridShapeFactory.GSMVisibility corner1, 0
+        HybridShapeFactory.GSMVisibility linea3, 0
+        geom_set_guardado_corners.AppendHybridShape corner2
+        Parte.Update
+        If Err.Number <> 0 Then
+            selection.Add corner2
+            selection.Delete
+            Err.Clear
+            B = 1
+            Set corner2 = HybridShapeFactory.AddNewCorner(corner1, linea3, Nothing, radio_corners_minimo, B, B, True)
+            corner2.DiscriminationIndex = D
+            corner2.BeginOfCorner = F
+            HybridShapeFactory.GSMVisibility corner1, 0
+            HybridShapeFactory.GSMVisibility linea3, 0
+        End If
+        geom_set_guardado_corners.AppendHybridShape corner2
+        Parte.Update
+        On Error GoTo 0
+       
+        selection.Clear
+
+        Dar_color_corners Red, Green, Blue, corner1, corner2, selection
+        Parametrizar_radios_doblado nombre_ruta, nombre_subruta, corner1, corner2, Parte
+
+    Next j
+    Parte.Update
+End Sub
+
+Sub Parametrizar_espesor(length3 As Parameter, nombre_subruta As String, RIB As RIB, Profile, Parte)
+    Dim nombre_espesor As String, nombre_formula_espesor As String, mi_espesor As Parameter, formula_espesor As formula
+    nombre_espesor = nombre_subruta & "\" & RIB.Name & "\ThickThin2"
+    Set mi_espesor = Parte.Parameters.Item(nombre_espesor)
+    nombre_formula_espesor = "Espesor_" & RIB.Name
+    Set formula_espesor = Parte.Relations.CreateFormula(nombre_formula_espesor, "Añade el espesor interior a los tubos.", mi_espesor, "Espesor_tubo")
+End Sub
+
+Sub Parametrizar_diametro(length2 As Parameter, nombre_ruta As String, nombre_subruta As String, Perfil, Parte)
+    Dim nombre_radio As String, mi_radio As Parameter, formula_radio As formula, nombre_formula_radio As String
+    nombre_radio = "WORKING_ELEMENTS\" & nombre_ruta & "\" & nombre_subruta & "\PROFILE\" & Perfil.Name & "\Radius"
+    Set mi_radio = Parte.Parameters.Item(nombre_radio)
+    nombre_formula_radio = "Radio_" & Perfil.Name
+    Set formula_radio = Parte.Relations.CreateFormula(nombre_formula_radio, "Añade el radio exterior del tubo a las secciones del mismo", mi_radio, "Diametro_tubo_exterior/2")
+End Sub
+
+Sub Parametrizar_planos_offset(length1, nombre_ruta, nombre_subruta, new_plane_offset, Parte)
+    Dim nombre_offset As String, mi_offset As Parameter, formula_offset As formula, nombre_formula_offset As String
+    nombre_offset = "WORKING_ELEMENTS\" & nombre_ruta & "\" & nombre_subruta & "\PATH\OFFSET\" & new_plane_offset.Name & "\Offset"
+    Set mi_offset = Parte.Parameters.Item(nombre_offset)
+    nombre_formula_offset = "Offset_" & new_plane_offset.Name
+    Set formula_offset = Parte.Relations.CreateFormula(nombre_formula_offset, "Añade la distancia entre los planos de referencia de los clamps y los planos offset de los codos.", mi_offset, "Distancia_codos_y_clamps")
+End Sub
+
+Sub Parametrizar_radios_doblado(nombre_ruta, nombre_subruta, corner1, corner2, Parte)
+    Dim nombre_radio_corner1 As String, nombre_radio_corner2 As String, mi_radio_corner1 As Parameter, mi_radio_corner2 As Parameter, formula_corner1 As formula, formula_corner2 As formula, nombre_formula_corner1 As String, nombre_formula_corner2 As String
+    nombre_radio_corner1 = "WORKING_ELEMENTS\" & nombre_ruta & "\" & nombre_subruta & "\PATH\CORNERS\" & corner1.Name & "\Radius"
+    nombre_radio_corner2 = "WORKING_ELEMENTS\" & nombre_ruta & "\" & nombre_subruta & "\PATH\CORNERS\" & corner2.Name & "\Radius"
+    Set mi_radio_corner1 = Parte.Parameters.Item(nombre_radio_corner1)
+    Set mi_radio_corner2 = Parte.Parameters.Item(nombre_radio_corner2)
+    nombre_formula_corner1 = "RadioCorner1_" & corner1.Name
+    nombre_formula_corner2 = "RadioCorner2_" & corner2.Name
+    Set formula_corner1 = Parte.Relations.CreateFormula(nombre_formula_corner1, "Añade el radio mínimo de los corner.", mi_radio_corner1, "Coef_radio_corners_minimo*Diametro_tubo_exterior")
+    Set formula_corner2 = Parte.Relations.CreateFormula(nombre_formula_corner2, "Añade el radio mínimo de los corner.", mi_radio_corner2, "Coef_radio_corners_minimo*Diametro_tubo_exterior")
+End Sub
+
+Sub Intercambiar_elementos(i, elementos)
+    For i = 1 To UBound(elementos) Step 4
+        Dim temp As HybridShape
+        Set temp = elementos(i)
+        Set elementos(i) = elementos(i + 1)
+        Set elementos(i + 1) = temp
+    Next i
+End Sub
+
+Private Sub CommandButton1_Click()
+    'ACEPTAR
+    If TextBox1.Value = "" Or TextBox2.Value = "" Or TextBox3.Value = "" Or TextBox4.Value = "" Or TextBox5.Value = "" Then
+        MsgBox "Ha dejado algún campo vacío, debe rellenarlo."
+    Else
+        distancia_planos_offset = TextBox1.Value
+        diametro_exterior_tubo = TextBox2.Value
+        espesor_tubo = TextBox3.Value
+        coef_distancia_minima_recta = TextBox4.Value
+        coef_radio_corners_minimo = TextBox5.Value
+   
+        Unload Me
+    End If
+End Sub
+
+Private Sub CommandButton3_Click()
+    'CANCELAR
+    Unload Me
+    valores = False
+End Sub
+
+Private Sub CommandButton4_Click()
+    'RESETEAR
+    TextBox1.Value = ""
+    TextBox2.Value = ""
+    TextBox3.Value = ""
+    TextBox4.Value = ""
+    TextBox5.Value = ""
+End Sub
+
+Private Sub UserForm_Initialize()
+    ' Establecer valores predeterminados en los TextBox
+    TextBox1.Value = 40
+    TextBox2.Value = 16
+    TextBox3.Value = "0,41"
+    TextBox4.Value = 3
+    TextBox5.Value = 4
+End Sub
